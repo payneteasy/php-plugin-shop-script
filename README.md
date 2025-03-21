@@ -1,0 +1,1 @@
+# php-plugin-shop-script
