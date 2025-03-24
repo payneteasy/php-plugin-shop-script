@@ -1,0 +1,42 @@
+Установка плагина 
+
+Авторизуйтесь в роли «Администратора»   
+Подключитесь по FTP к серверу   и поместите в директорию   wa-plugins/payment папку с плагином 
+Нажмите на иконку Shop-Script 
+В боковом меню нажмите settings
+В появившемся меню нажмите payment
+Наведите курсор на кнопку add payment
+в выпадающем списке нажмите на payneteasy
+
+Если у вас хостинг
+
+Авторизуйтесь на хостинге и войдите в панель управления базой данных (phpMyAdmin)
+Выполните запрос скопировав и вставив данную строку
+CREATE TABLE IF NOT EXISTS `payneteasy_payments` (`paynet_order_id` int NOT NULL, `merchant_order_id` int NOT NULL, PRIMARY KEY  (`merchant_order_id`));
+
+Если у вас VPS
+
+Откройте консоль, авторизуйтесь в mysql, выберите базу данных вашего сайта и выполните запрос
+CREATE TABLE IF NOT EXISTS `payneteasy_payments` (`paynet_order_id` int NOT NULL, `merchant_order_id` int NOT NULL, PRIMARY KEY  (`merchant_order_id`));
+
+
+Удаление плагина 
+
+Авторизуйтесь в роли «Администратора»
+Нажмите на иконку Shop-Script 
+В боковом меню нажмите settings
+В строке платёжной системы  «payneteasy»   нажмите «Выбрать действие» 
+в выпадающем меню   нажмите «Удалить» 
+Подключитесь по FTP к серверу и перейдите в директорию wa-plugins/payment    Удалить папку payneteasy 
+
+Если у вас хостинг
+
+Авторизуйтесь на хостинге и войдите в панель управления базой данных (phpMyAdmin)
+Выполните запрос скопировав и вставив данную строку
+DROP TABLE `payneteasy_payments`;
+
+Если у вас VPS
+
+Откройте консоль, авторизуйтесь в mysql, выберите базу данных вашего сайта и выполните запрос
+DROP TABLE `payneteasy_payments`;
+

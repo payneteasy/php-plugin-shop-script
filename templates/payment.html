@@ -1,0 +1,24 @@
+
+{if $auto_submit && $payment_method == 'form'}
+    <i class="icon16 loading"></i> <em>{$form_desc}</em>
+    <br /><br />
+    <script type="text/javascript">
+        setTimeout(function() {
+            document.location.href = '{$form_url}';
+        }, 2000);
+    </script>
+<button onclick="document.location.href = '{$form_url}'">{$form_btn}</button>
+{/if}
+{if $payment_method == 'direct' && $three_d_secure}
+{$html}
+{/if}
+{if $payment_method == 'direct' && !$three_d_secure}
+<i class="icon16 loading"></i> <em>{$form_desc}</em>
+<br /><br />
+<script type="text/javascript">
+    setTimeout(function() {
+        document.location.href = '{$form_url}';
+    }, 2000);
+</script>
+<button onclick="document.location.href = '{$form_url}'">{$form_btn}</button>
+{/if}

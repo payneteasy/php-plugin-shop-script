@@ -1,0 +1,80 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: wa-plugins/payment/payneteasy\n"
+"POT-Creation-Date: 2021-02-10 10:40+0300\n"
+"PO-Revision-Date: \n"
+"Last-Translator: wa-plugins/payment/payneteasy\n"
+"Language-Team: wa-plugins/payment/payneteasy\n"
+"Language: ru_RU\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=((((n%10)==1)&&((n%100)!=11))?(0):(((((n%10)>=2)&&((n%10)<=4))&&(((n%100)<10)||((n%100)>=20)))?(1):2));\n"
+"X-Poedit-SourceCharset: utf-8\n"
+"X-Poedit-Basepath: utf-8\n"
+"X-Generator: Poedit 3.4.4\n"
+"X-Poedit-SearchPath-0: .\n"
+"X-Poedit-SearchPath-1: .\n"
+
+msgid "PaynetEasy"
+msgstr "PaynetEasy"
+
+msgid "Pay with PaynetEasy Payment"
+msgstr "Pay with PaynetEasy Payment"
+
+msgid "Currency not supported."
+msgstr "Currency not supported"
+
+msgid "PaynetEasy payment system URL is unavailable."
+msgstr "PaynetEasy payment system URL is unavailable."
+
+msgid "Invalid invoice number."
+msgstr "Invalid invoice number."
+
+msgid "Order ID not found."
+msgstr "Order ID not found."
+
+msgid "Order not found."
+msgstr "Order not found."
+
+msgid "Merchant Login is required to call the API."
+msgstr "Merchant Login is required to call the API."
+
+msgid "Merchant Control key is required to call the API."
+msgstr "Merchant Control key is required to call the API."
+
+msgid "Merchant Endpoint id is required to call the API."
+msgstr "Merchant Endpoint id is required to call the API."
+
+msgid "Enable sandbox mode"
+msgstr "Enable sandbox mode"
+
+msgid "In this mode, the payment for the goods is not charged."
+msgstr "In this mode, the payment for the goods is not charged."
+
+msgid "Enable logging"
+msgstr "Enable logging"
+
+msgid "Logging is used to debug plugin performance by storing API request data."
+msgstr "Logging is used to debug plugin performance by storing API request data."
+
+msgid "Redirecting to the bank website for payment..."
+msgstr "Redirecting to the bank website for payment..."
+
+msgid "Go to the payment form, to the bank page"
+msgstr "Go to the payment form, to the bank page"
+
+msgid "3D Secure"
+msgstr "3D Secure"
+
+msgid "3D Secure or Non 3D Secure (WORK ONLY WITH DIRECT INTEGRATION METHOD)."
+msgstr "3D Secure or Non 3D Secure (WORK ONLY WITH DIRECT INTEGRATION METHOD)."
+
+msgid "Gateway url (LIVE)"
+msgstr "Gateway url (LIVE)"
+
+msgid "Gateway url (SANDBOX)"
+msgstr "Gateway url (SANDBOX)"
+
+msgid "Payment method"
+msgstr ""

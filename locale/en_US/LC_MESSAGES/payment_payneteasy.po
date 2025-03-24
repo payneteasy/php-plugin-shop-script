@@ -1,0 +1,82 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: wa-plugins/payment/payneteasy\n"
+"POT-Creation-Date: 2013-04-25 12:05+0400\n"
+"PO-Revision-Date: \n"
+"Last-Translator: wa-plugins/payment/payneteasy\n"
+"Language-Team: wa-plugins/payment/payneteasy\n"
+"Language: en_US\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Poedit-SourceCharset: utf-8\n"
+"X-Poedit-Basepath: .\n"
+"X-Generator: Poedit 3.4.4\n"
+"X-Poedit-SearchPath-0: .\n"
+"X-Poedit-SearchPath-1: .\n"
+
+msgid "PaynetEasy"
+msgstr ""
+
+msgid "Pay with PaynetEasy Payment"
+msgstr ""
+
+msgid "Currency not supported."
+msgstr ""
+
+msgid "Email is empty."
+msgstr ""
+
+msgid "PaynetEasy payment system URL is unavailable."
+msgstr ""
+
+msgid "Invalid invoice number."
+msgstr ""
+
+msgid "Order ID not found."
+msgstr ""
+
+msgid "Order not found."
+msgstr ""
+
+msgid "Merchant Login is required to call the API."
+msgstr ""
+
+msgid "Merchant Control key is required to call the API."
+msgstr ""
+
+msgid "Merchant Endpoint id is required to call the API."
+msgstr ""
+
+msgid "Enable sandbox mode"
+msgstr ""
+
+msgid "In this mode, the payment for the goods is not charged."
+msgstr ""
+
+msgid "Enable logging"
+msgstr ""
+
+msgid "Logging is used to debug plugin performance by storing API request data."
+msgstr ""
+
+msgid "Redirecting to the bank website for payment..."
+msgstr ""
+
+msgid "Go to the payment form, to the bank page"
+msgstr ""
+
+msgid "3D Secure"
+msgstr ""
+
+msgid "3D Secure or Non 3D Secure (WORK ONLY WITH DIRECT INTEGRATION METHOD)."
+msgstr ""
+
+msgid "Gateway url (LIVE)"
+msgstr ""
+
+msgid "Gateway url (SANDBOX)"
+msgstr ""
+
+msgid "Payment method"
+msgstr ""
