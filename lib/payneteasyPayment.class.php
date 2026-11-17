@@ -71,6 +71,8 @@ class payneteasyPayment extends waPayment implements waIPayment
             }
 
             if ($remote_status === 'approved') {
+                // The gateway callback may have been lost: mark the order paid now
+                $this->syncApprovedOrder($order->id, $status);
                 return $this->renderMessage($this->_w('The order has already been paid.'));
             }
 
@@ -235,6 +237,45 @@ class payneteasyPayment extends waPayment implements waIPayment
         )->fetchField('paynet_order_id');
 
         return $paynet_order_id ? (int)$paynet_order_id : null;
+    }
+
+
+    /**
+     * Отмечает заказ оплаченным, если шлюз сообщил approved, а callback до магазина не дошёл.
+     * Статус получен запросом со своего сервера; ошибка синхронизации не мешает показу страницы.
+     *
+     * @param int   $order_id
+     * @param array $status_data Ответ шлюза на запрос статуса
+     *
+     * @return void
+     */
+    private function syncApprovedOrder($order_id, array $status_data): void
+    {
+        try {
+            $order_row = (new shopOrderModel())->getById((int)$order_id);
+            if ($order_row && empty($order_row['paid_date'])) {
+                $this->changeStatus($status_data, [], waOrder::factory($order_row), false);
+            }
+        } catch (\Exception | waException | PaynetEasyException $e) {
+            $this->logger->error(sprintf(
+                __FUNCTION__ . ' > cannot mark order as paid: %s; Order id: %s;',
+                $e->getMessage(),
+                $order_id
+            ));
+        }
+    }
+
+
+    /**
+     * Серверный callback шлюза (а не переход покупателя): PaynetEasy всегда передаёт orderid и control
+     *
+     * @param array $request
+     *
+     * @return bool
+     */
+    private function isGatewayCallback(array $request): bool
+    {
+        return isset($request['orderid'], $request['control']);
     }
 
 
@@ -811,8 +852,11 @@ class payneteasyPayment extends waPayment implements waIPayment
                     'message' => 'return'
                 );
                 wa()->getResponse()->redirect($url);
-            } elseif ($this->request_type === 'webhook') {
-                die('OK');
+            } elseif ($this->request_type === 'webhook' || $this->isGatewayCallback($request)) {
+                // Server-to-server callback from PaynetEasy: answer 200 "OK", not a redirect.
+                // An empty 'template' makes the payments relay exit after the output.
+                echo 'OK';
+                return array('template' => false);
             }
             if (($transaction_data['state'] ?? null) == self::STATE_DECLINED || ($transaction_data['state'] ?? null) == self::STATE_CANCELED) {
                 $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
@@ -1041,7 +1085,7 @@ class payneteasyPayment extends waPayment implements waIPayment
         $transaction_data['order_id'] = ifset($transaction_raw_data['merchant-order-id']);
         $transaction_data['amount'] = ifset($transaction_raw_data['amount']);
         $transaction_data['currency_id'] = ifset($transaction_raw_data['currency']);
-        $transaction_data['native_id'] = $this->order_id;
+        $transaction_data['native_id'] = $transaction_raw_data['paynet-order-id'] ?? $this->order_id;
         return $transaction_data;
     }
 

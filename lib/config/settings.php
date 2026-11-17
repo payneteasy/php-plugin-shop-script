@@ -24,7 +24,7 @@ $settings = [
         'value' => '',
         'title' => 'Control key *',
         'description' => _wp('Merchant Control key is required to call the API.'),
-        'control_type' => 'input',
+        'control_type' => waHtmlControl::PASSWORD,
         'required' => true
     ],
     'endpoint_id' => [
@@ -41,7 +41,7 @@ $settings = [
         'control_type' => 'checkbox',
     ],
     'logging' => [
-        'value' => '1',
+        'value' => '0',
         'title' => _wp('Logging'),
         'description' => _wp('Logging is used to debug plugin performance by storing API request data.'),
         'control_type' => 'checkbox',
