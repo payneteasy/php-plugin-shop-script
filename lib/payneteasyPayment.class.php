@@ -222,6 +222,43 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
+     * Расширяет payneteasy_payments.paynet_order_id до BIGINT UNSIGNED, если колонка ещё INT.
+     *
+     * Скрипт lib/updates не запускается, если плагин обновили заменой файлов без очистки
+     * кэша Webasyst, поэтому схема проверяется здесь. Проверка выполняется один раз:
+     * результат запоминается в настройках плагина.
+     *
+     * @return void
+     */
+    private function ensureSchema(): void
+    {
+        static $checked = false;
+        if ($checked) {
+            return;
+        }
+        $checked = true;
+
+        if ($this->getGeneralSettings('paynet_order_id_bigint')) {
+            return;
+        }
+
+        try {
+            $model = new waModel();
+            $column = $model->query("SHOW COLUMNS FROM `payneteasy_payments` LIKE 'paynet_order_id'")->fetchAssoc();
+            if (!$column) {
+                return;
+            }
+            if (stripos((string)$column['Type'], 'bigint') === false) {
+                $model->exec('ALTER TABLE `payneteasy_payments` MODIFY `paynet_order_id` BIGINT UNSIGNED NOT NULL');
+            }
+            $this->setGeneralSettings('paynet_order_id_bigint', 1);
+        } catch (waException $e) {
+            self::log($this->id, 'Cannot widen payneteasy_payments.paynet_order_id to BIGINT: '.$e->getMessage());
+        }
+    }
+
+
+    /**
      * Возвращает paynet_order_id ранее созданного платежа по заказу или null
      *
      * @param int $order_id
@@ -230,6 +267,7 @@ class payneteasyPayment extends waPayment implements waIPayment
      */
     private function getStoredPaynetOrderId($order_id): ?int
     {
+        $this->ensureSchema();
         $model = new waModel();
         $paynet_order_id = $model->query(
             "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id",
@@ -696,6 +734,7 @@ class payneteasyPayment extends waPayment implements waIPayment
             $merchant_order_id = $response['merchant-order-id'];
 
         if (isset($paynet_order_id)) {
+            $this->ensureSchema();
             $model = new waModel();
             $sql = "REPLACE INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`) VALUES (i:paynet_order_id, i:merchant_order_id)";
             $model->exec($sql, [
@@ -996,6 +1035,7 @@ class payneteasyPayment extends waPayment implements waIPayment
         $this->setPayneteasyLogger();
 
         $order_id = (int)$order_id;
+        $this->ensureSchema();
         $model = new waModel();
         $sql = "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id";
         $paynet_order_id = $model->query($sql, ['order_id' => $order_id])->fetchAll();
