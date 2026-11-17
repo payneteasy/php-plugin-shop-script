@@ -4,10 +4,10 @@
     <br /><br />
     <script type="text/javascript">
         setTimeout(function() {
-            document.location.href = '{$form_url}';
+            document.location.href = '{$form_url|escape:'javascript'}';
         }, 2000);
     </script>
-<button onclick="document.location.href = '{$form_url}'">{$form_btn}</button>
+<button onclick="document.location.href = '{$form_url|escape:'javascript'|escape:'html'}'">{$form_btn}</button>
 {/if}
 {if $payment_method == 'direct' && $three_d_secure}
 {$html}
@@ -17,8 +17,8 @@
 <br /><br />
 <script type="text/javascript">
     setTimeout(function() {
-        document.location.href = '{$form_url}';
+        document.location.href = '{$form_url|escape:'javascript'}';
     }, 2000);
 </script>
-<button onclick="document.location.href = '{$form_url}'">{$form_btn}</button>
+<button onclick="document.location.href = '{$form_url|escape:'javascript'|escape:'html'}'">{$form_btn}</button>
 {/if}
