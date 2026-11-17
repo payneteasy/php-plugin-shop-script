@@ -566,8 +566,11 @@ class payneteasyPayment extends waPayment implements waIPayment
 
         if (isset($paynet_order_id)) {
             $model = new waModel();
-            $sql = "REPLACE INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`) VALUES ($paynet_order_id, $merchant_order_id)";
-            $model->query($sql);
+            $sql = "REPLACE INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`) VALUES (i:paynet_order_id, i:merchant_order_id)";
+            $model->exec($sql, [
+                'paynet_order_id' => (int)$paynet_order_id,
+                'merchant_order_id' => (int)($merchant_order_id ?? $order->id),
+            ]);
         }
 
         return $response;
@@ -624,11 +627,29 @@ class payneteasyPayment extends waPayment implements waIPayment
     private function setOrderId(array $request): void
     {
         if ($this->request_type === 'return') {
-            $this->order_id = $request['order_id'];
+            $this->order_id = self::validateOrderId($request['order_id'] ?? null);
         } elseif ($this->request_type === 'webhook') {
             $php_input = json_decode(file_get_contents('php://input'), true) ?: null;
-            $this->order_id = $php_input['object']['order_id'] ?? '';
+            $this->order_id = self::validateOrderId($php_input['object']['order_id'] ?? null);
         }
+    }
+
+
+    /**
+     * Проверяет, что идентификатор заказа состоит только из цифр
+     *
+     * @param mixed $order_id
+     *
+     * @return string
+     *
+     * @throws waPaymentException If the order ID is not a positive integer
+     */
+    private static function validateOrderId($order_id): string
+    {
+        if (!is_scalar($order_id) || !preg_match('/^[1-9][0-9]{0,18}$/', (string)$order_id)) {
+            throw new waPaymentException('Invalid order ID.');
+        }
+        return (string)$order_id;
     }
 
 
@@ -652,19 +673,28 @@ class payneteasyPayment extends waPayment implements waIPayment
 //                throw new waPaymentException($this->_w('Order ID not found.'));
 //            }
 
-            $order_model = new shopOrderModel();
-            $order_by_id = $order_model->getById($request['order_id']);
-            $order = waOrder::factory($order_by_id);
+            $order_id = (int)self::validateOrderId($this->order_id ?? $request['order_id'] ?? null);
 
-//            if (!$order) {
-//                throw new waPaymentException($this->_w('Order not found.'));
-//            }
-            
-            $status_data = $this->getPaymentStatusData($this->order_id??$request['order_id']);
-            $transaction_data = $this->changeStatus($status_data, $request, $order);
+            $order_model = new shopOrderModel();
+            $order_by_id = $order_model->getById($order_id);
+            if (empty($order_by_id)) {
+                throw new waPaymentException('Order not found.');
+            }
+
+            // Only orders placed with this payment plugin may be updated
+            $order_params = (new shopOrderParamsModel())->get($order_id);
+            if (($order_params['payment_plugin'] ?? null) !== $this->id) {
+                throw new waPaymentException('Order is not paid with this payment plugin.');
+            }
+
+            $order = waOrder::factory($order_by_id);
+            $is_paid = !empty($order_by_id['paid_date']);
+
+            $status_data = $this->getPaymentStatusData($order_id);
+            $transaction_data = $this->changeStatus($status_data, $request, $order, $is_paid);
 
             if ($this->request_type === 'return') {
-                if ($transaction_data['state'] == self::STATE_DECLINED || $transaction_data['state'] == self::STATE_CANCELED) {
+                if (($transaction_data['state'] ?? null) == self::STATE_DECLINED || ($transaction_data['state'] ?? null) == self::STATE_CANCELED) {
                     $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
                 } else {
                     $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_SUCCESS, $transaction_data);
@@ -677,7 +707,7 @@ class payneteasyPayment extends waPayment implements waIPayment
             } elseif ($this->request_type === 'webhook') {
                 die('OK');
             }
-            if ($transaction_data['state'] == self::STATE_DECLINED || $transaction_data['state'] == self::STATE_CANCELED) {
+            if (($transaction_data['state'] ?? null) == self::STATE_DECLINED || ($transaction_data['state'] ?? null) == self::STATE_CANCELED) {
                 $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
             } else {
                 $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_SUCCESS, $transaction_data);
@@ -702,13 +732,15 @@ class payneteasyPayment extends waPayment implements waIPayment
      * Получение информации о платеже и изменение статуса заказа
      *
      * @param array $status_data Массив данных статуса платежа.
+     * @param bool $is_paid       Заказ уже оплачен.
      *
      * @return array
      */
     private function changeStatus(
         array $status_data, 
         array $request, 
-        $order
+        $order,
+        bool $is_paid = false
     ): array {
         $transaction_data = $this->formalizeData($status_data);
         $transaction_data['order_id'] = $order->id;
@@ -718,11 +750,6 @@ class payneteasyPayment extends waPayment implements waIPayment
                 'method' => self::CALLBACK_PAYMENT,
                 'state' => self::STATE_CAPTURED,
                 'type' => self::OPERATION_AUTH_CAPTURE
-            ],
-            'processing' => [
-                'method' => self::CALLBACK_AUTH,
-                'state' => self::STATE_AUTH,
-                'type' => self::OPERATION_AUTH_ONLY
             ],
             'refunded' => [
                 'method' => self::CALLBACK_REFUND,
@@ -734,25 +761,45 @@ class payneteasyPayment extends waPayment implements waIPayment
                 'state' => self::STATE_DECLINED,
                 'type' => self::OPERATION_CANCEL
             ],
+            'error' => [
+                'method' => self::CALLBACK_DECLINE,
+                'state' => self::STATE_DECLINED,
+                'type' => self::OPERATION_CANCEL
+            ],
+            'filtered' => [
+                'method' => self::CALLBACK_DECLINE,
+                'state' => self::STATE_DECLINED,
+                'type' => self::OPERATION_CANCEL
+            ],
         ];
             
-        $payment_status = trim($status_data['status']);
+        // 'processing' (customer still paying), unknown or absent status: leave the order unchanged
+        $payment_status = trim((string)($status_data['status'] ?? ''));
         $order_status = $available_statuses[$payment_status] ?? [];
-        $current_order_status = self::getTransaction($order->__get('params')['payment_transaction_id'] ?? []);
 
-        if (!empty($order_status)) {
-            $app_payment_method = $order_status['method'];
-            $transaction_data['state'] = $order_status['state'];
-            $transaction_data['type'] = $order_status['type'];
-        } else {
-            $app_payment_method = self::CALLBACK_CANCEL;
-            $transaction_data['state'] = self::STATE_CANCELED;
-            $transaction_data['type'] = self::OPERATION_CANCEL;
+        if (empty($order_status)) {
             $this->logger->debug(sprintf(
-                __FUNCTION__ . ' > getOrderInfo. Payment not paid or canceled. Order ID: %s', 
+                __FUNCTION__ . ' > getOrderInfo. Payment not final, order unchanged. Status: %s; Order ID: %s', 
+                $payment_status,
                 $order->id
             ));
+            return $transaction_data;
         }
+
+        // Never downgrade an already paid order (only a refund may follow a payment)
+        if ($is_paid && $order_status['state'] !== self::STATE_REFUNDED) {
+            $this->logger->debug(sprintf(
+                __FUNCTION__ . ' > getOrderInfo. Order already paid, order unchanged. Status: %s; Order ID: %s', 
+                $payment_status,
+                $order->id
+            ));
+            return $transaction_data;
+        }
+
+        $current_order_status = self::getTransaction($order->__get('params')['payment_transaction_id'] ?? []);
+        $app_payment_method = $order_status['method'];
+        $transaction_data['state'] = $order_status['state'];
+        $transaction_data['type'] = $order_status['type'];
 
         if (
             $current_order_status['state'] !== $transaction_data['state'] &&
@@ -797,9 +844,13 @@ class payneteasyPayment extends waPayment implements waIPayment
     {
         $this->setPayneteasyLogger();
 
+        $order_id = (int)$order_id;
         $model = new waModel();
-        $sql = "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = $order_id";
-        $paynet_order_id = $model->query($sql)->fetchAll();
+        $sql = "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id";
+        $paynet_order_id = $model->query($sql, ['order_id' => $order_id])->fetchAll();
+        if (empty($paynet_order_id[0]['paynet_order_id'])) {
+            throw new waPaymentException('PaynetEasy payment not found for order.');
+        }
 
         // Logging input
         $this->logger->debug(
