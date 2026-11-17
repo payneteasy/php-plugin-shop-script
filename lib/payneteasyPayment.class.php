@@ -1057,7 +1057,7 @@ class payneteasyPayment extends waPayment implements waIPayment
         $transaction_data['order_id'] = ifset($transaction_raw_data['merchant-order-id']);
         $transaction_data['amount'] = ifset($transaction_raw_data['amount']);
         $transaction_data['currency_id'] = ifset($transaction_raw_data['currency']);
-        $transaction_data['native_id'] = $this->order_id;
+        $transaction_data['native_id'] = $transaction_raw_data['paynet-order-id'] ?? $this->order_id;
         return $transaction_data;
     }
 
