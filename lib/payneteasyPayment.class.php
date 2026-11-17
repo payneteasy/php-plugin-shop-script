@@ -61,17 +61,36 @@ class payneteasyPayment extends waPayment implements waIPayment
             // if (!in_array($order->currency_id, $this->allowedCurrency())) {
             //     throw new waException($this->_w('Currency not supported.'));
             // }
-            $pay_url = $this->getPayUrl($order);
-            if ($this->payment_method == 'form') {
-                $pay_url = $pay_url['redirect-url'];
-            } elseif ($this->payment_method == 'direct') {
+            // The payment page can be shown many times (page reload, reopening the order).
+            // A new sale must not be sent while a previous one exists and is approved or still processing.
+            $has_payment = $this->getStoredPaynetOrderId($order->id) !== null;
+            $remote_status = '';
+            if ($has_payment) {
+                $status = $this->getPaymentStatusData($order->id);
+                $remote_status = trim((string)($status['status'] ?? ''));
+            }
+
+            if ($remote_status === 'approved') {
+                return $this->renderMessage($this->_w('The order has already been paid.'));
+            }
+
+            if ($this->payment_method == 'direct') {
+                if (!$has_payment) {
+                    // Card data is sent only once and is not stored after that
+                    $this->getPayUrl($order);
+                } elseif ($remote_status !== 'processing') {
+                    return $this->renderMessage($this->_w('The payment was declined. Please contact the store to pay for the order.'));
+                }
+
                 $pay_url = $this->getRelayUrl().'?transaction_result=result&app_id='.$this->app_id.'&merchant_id='.$this->merchant_id.'&order_id='.$order->id;
                 if ($this->three_d_secure) {
-                    $pay_url = $this->getRelayUrl().'?transaction_result=result&app_id='.$this->app_id.'&merchant_id='.$this->merchant_id.'&order_id='.$order->id;
                     $status = $this->getPaymentStatusData($order->id);
                     $view = wa()->getView();
-                    $view->assign('html', $status['html']);
+                    $view->assign('html', $status['html'] ?? '');
                 }
+            } else {
+                // Payment form: a new form is created only if the previous one was not paid
+                $pay_url = $this->getPayUrl($order)['redirect-url'] ?? '';
             }
 
             $view = wa()->getView();
@@ -169,6 +188,66 @@ class payneteasyPayment extends waPayment implements waIPayment
         }
 
         return parent::customFields($order) + $fields;
+    }
+
+
+    /**
+     * Card fields collected by customFields(); Shop-Script stores them as order params
+     */
+    private const CARD_PARAM_NAMES = [
+        'payment_params_credit_card_number',
+        'payment_params_card_printed_name',
+        'payment_params_expire_month',
+        'payment_params_expire_year',
+        'payment_params_cvv2',
+    ];
+
+
+    /**
+     * Удаляет данные карты из параметров заказа (PCI DSS: CVV нельзя хранить)
+     *
+     * @param int $order_id
+     *
+     * @return void
+     */
+    private function forgetCardData($order_id): void
+    {
+        (new shopOrderParamsModel())->deleteByField([
+            'order_id' => (int)$order_id,
+            'name' => self::CARD_PARAM_NAMES,
+        ]);
+    }
+
+
+    /**
+     * Возвращает paynet_order_id ранее созданного платежа по заказу или null
+     *
+     * @param int $order_id
+     *
+     * @return int|null
+     */
+    private function getStoredPaynetOrderId($order_id): ?int
+    {
+        $model = new waModel();
+        $paynet_order_id = $model->query(
+            "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id",
+            ['order_id' => (int)$order_id]
+        )->fetchField('paynet_order_id');
+
+        return $paynet_order_id ? (int)$paynet_order_id : null;
+    }
+
+
+    /**
+     * Текстовое сообщение вместо формы оплаты
+     *
+     * @param string $message
+     *
+     * @return string
+     */
+    private function renderMessage(string $message): string
+    {
+        return '<p>' . htmlspecialchars($message, ENT_QUOTES, 'UTF-8') . '</p>';
     }
 
 
@@ -465,6 +544,12 @@ class payneteasyPayment extends waPayment implements waIPayment
             'expire_year' => $payneteasy_card_expiry_year??'',
             'cvv2' => $payneteasy_card_cvv??'',
         ];
+
+        // Card data must not stay in the database: remove it before the request is sent,
+        // so it is gone even if the gateway call fails
+        if ($this->payment_method == 'direct') {
+            $this->forgetCardData($order->id);
+        }
 
         $transaction_data = array(
             'order_id' => $order->id,
