@@ -679,6 +679,20 @@ class payneteasyPayment extends waPayment implements waIPayment
         try {
             if (isset($request) && !empty($request)) {
 
+                // redirect_url and the callback URL from the settings carry app_id,
+                // merchant_id and type packed into ?params=<base64 json>
+                if (isset($request['params']) && is_string($request['params'])) {
+                    // the value is not urlencoded, so "+" from base64 arrives as a space
+                    $params = json_decode((string)base64_decode(strtr($request['params'], ' ', '+'), true), true);
+                    if (is_array($params)) {
+                        foreach (['app_id', 'merchant_id', 'type'] as $key) {
+                            if (isset($params[$key]) && is_scalar($params[$key]) && !isset($request[$key])) {
+                                $request[$key] = (string)$params[$key];
+                            }
+                        }
+                    }
+                }
+
                 $this->app_id = $request['app_id'] ?? '';
                 $this->merchant_id = $request['merchant_id'] ?? '';
                 $this->request_type = $request['type'] ?? '';
@@ -711,11 +725,12 @@ class payneteasyPayment extends waPayment implements waIPayment
      */
     private function setOrderId(array $request): void
     {
-        if ($this->request_type === 'return') {
-            $this->order_id = self::validateOrderId($request['order_id'] ?? null);
-        } elseif ($this->request_type === 'webhook') {
-            $php_input = json_decode(file_get_contents('php://input'), true) ?: null;
-            $this->order_id = self::validateOrderId($php_input['object']['order_id'] ?? null);
+        // PaynetEasy sends the shop order id as client_orderid (merchant_order in some responses).
+        // The order status itself is always queried from the gateway, never taken from the request.
+        if ($this->request_type === 'return' || $this->request_type === 'webhook') {
+            $this->order_id = self::validateOrderId(
+                $request['client_orderid'] ?? $request['merchant_order'] ?? $request['order_id'] ?? null
+            );
         }
     }
 
