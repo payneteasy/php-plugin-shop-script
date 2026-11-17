@@ -1,5 +1,6 @@
 
-{if $auto_submit && $payment_method == 'form'}
+{if $payment_method == 'form'}
+{if $auto_submit}
     <i class="icon16 loading"></i> <em>{$form_desc}</em>
     <br /><br />
     <script type="text/javascript">
@@ -7,6 +8,7 @@
             document.location.href = '{$form_url|escape:'javascript'}';
         }, 2000);
     </script>
+{/if}
 <button onclick="document.location.href = '{$form_url|escape:'javascript'|escape:'html'}'">{$form_btn}</button>
 {/if}
 {if $payment_method == 'direct' && $three_d_secure}
