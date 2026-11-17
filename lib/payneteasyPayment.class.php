@@ -689,9 +689,11 @@ class payneteasyPayment extends waPayment implements waIPayment
                 if (isset($request['params']) && is_string($request['params'])) {
                     // the value is not urlencoded, so "+" from base64 arrives as a space
                     $params = json_decode((string)base64_decode(strtr($request['params'], ' ', '+'), true), true);
+                    // Our own params take precedence: PaynetEasy callbacks carry their own
+                    // "type" field (sale/reversal/chargeback), which must not replace type=webhook
                     if (is_array($params)) {
                         foreach (['app_id', 'merchant_id', 'type'] as $key) {
-                            if (isset($params[$key]) && is_scalar($params[$key]) && !isset($request[$key])) {
+                            if (isset($params[$key]) && is_scalar($params[$key])) {
                                 $request[$key] = (string)$params[$key];
                             }
                         }
