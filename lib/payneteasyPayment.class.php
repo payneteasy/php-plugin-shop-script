@@ -561,12 +561,17 @@ class payneteasyPayment extends waPayment implements waIPayment
 //        $success_url = $this->getRelayUrl() . '?transaction_result=success&order_id='.$order->id;
 //        $fail_url = $this->getRelayUrl() . '?transaction_result=failure';
 
-        $full_name = $order->getContact()->getName();
-        $full_name = explode(' ', $full_name);
-        $last_name = $full_name[0];
-        $first_name = $full_name[1];
-        $shipping_address = $order->shipping_address;
-        $country_name = $shipping_address['country_name'];
+        $contact = $order->getContact();
+        $first_name = trim((string)$contact->get('firstname'));
+        $last_name = trim((string)$contact->get('lastname'));
+        if ($first_name === '' && $last_name === '') {
+            // Fallback for contacts with only a full name: "First Last"
+            $name_parts = preg_split('/\s+/', trim((string)$contact->getName()), 2);
+            $first_name = $name_parts[0] ?? '';
+            $last_name = $name_parts[1] ?? '';
+        }
+        $shipping_address = (array)($order->shipping_address ?? []);
+        $country_name = $shipping_address['country_name'] ?? null;
         $countries = $this->getCountries();
 
         foreach ($countries as $country) {
@@ -575,9 +580,9 @@ class payneteasyPayment extends waPayment implements waIPayment
             }
         }
 
-        $city = $shipping_address['city'];
-        $zip = $shipping_address['zip'];
-        $address = $shipping_address['address'];
+        $city = $shipping_address['city'] ?? '';
+        $zip = $shipping_address['zip'] ?? '';
+        $address = $shipping_address['address'] ?? '';
         $data = [
             'client_orderid' => (string)$order->id,
             'order_desc' => 'Order # ' . $order->id,
