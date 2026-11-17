@@ -586,7 +586,7 @@ class payneteasyPayment extends waPayment implements waIPayment
         $data = [
             'client_orderid' => (string)$order->id,
             'order_desc' => 'Order # ' . $order->id,
-            'amount' => $total,
+            'amount' => number_format((float)$total, 2, '.', ''),
             'currency' => $order->currency,
             'address1' => $address,
             'city' => $city,
@@ -1117,7 +1117,7 @@ class payneteasyPayment extends waPayment implements waIPayment
         $base = '';
         $base .= $endpointId;
         $base .= $data['client_orderid'];
-        $base .= $data['amount'] * 100;
+        $base .= (int)round((float)$data['amount'] * 100);
         $base .= $data['email'];
 
         return $this->signString($base, $merchantControl);

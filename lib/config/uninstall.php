@@ -2,4 +2,4 @@
 
 $model = new waModel();
 
-$model->query('DROP TABLE `payneteasy_payments`;');
+$model->query('DROP TABLE IF EXISTS `payneteasy_payments`;');
