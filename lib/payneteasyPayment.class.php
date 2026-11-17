@@ -239,6 +239,19 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
+     * Серверный callback шлюза (а не переход покупателя): PaynetEasy всегда передаёт orderid и control
+     *
+     * @param array $request
+     *
+     * @return bool
+     */
+    private function isGatewayCallback(array $request): bool
+    {
+        return isset($request['orderid'], $request['control']);
+    }
+
+
+    /**
      * Текстовое сообщение вместо формы оплаты
      *
      * @param string $message
@@ -811,8 +824,11 @@ class payneteasyPayment extends waPayment implements waIPayment
                     'message' => 'return'
                 );
                 wa()->getResponse()->redirect($url);
-            } elseif ($this->request_type === 'webhook') {
-                die('OK');
+            } elseif ($this->request_type === 'webhook' || $this->isGatewayCallback($request)) {
+                // Server-to-server callback from PaynetEasy: answer 200 "OK", not a redirect.
+                // An empty 'template' makes the payments relay exit after the output.
+                echo 'OK';
+                return array('template' => false);
             }
             if (($transaction_data['state'] ?? null) == self::STATE_DECLINED || ($transaction_data['state'] ?? null) == self::STATE_CANCELED) {
                 $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
