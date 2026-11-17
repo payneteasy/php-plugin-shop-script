@@ -566,8 +566,11 @@ class payneteasyPayment extends waPayment implements waIPayment
 
         if (isset($paynet_order_id)) {
             $model = new waModel();
-            $sql = "REPLACE INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`) VALUES ($paynet_order_id, $merchant_order_id)";
-            $model->query($sql);
+            $sql = "REPLACE INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`) VALUES (i:paynet_order_id, i:merchant_order_id)";
+            $model->exec($sql, [
+                'paynet_order_id' => (int)$paynet_order_id,
+                'merchant_order_id' => (int)($merchant_order_id ?? $order->id),
+            ]);
         }
 
         return $response;
@@ -624,11 +627,29 @@ class payneteasyPayment extends waPayment implements waIPayment
     private function setOrderId(array $request): void
     {
         if ($this->request_type === 'return') {
-            $this->order_id = $request['order_id'];
+            $this->order_id = self::validateOrderId($request['order_id'] ?? null);
         } elseif ($this->request_type === 'webhook') {
             $php_input = json_decode(file_get_contents('php://input'), true) ?: null;
-            $this->order_id = $php_input['object']['order_id'] ?? '';
+            $this->order_id = self::validateOrderId($php_input['object']['order_id'] ?? null);
         }
+    }
+
+
+    /**
+     * Проверяет, что идентификатор заказа состоит только из цифр
+     *
+     * @param mixed $order_id
+     *
+     * @return string
+     *
+     * @throws waPaymentException If the order ID is not a positive integer
+     */
+    private static function validateOrderId($order_id): string
+    {
+        if (!is_scalar($order_id) || !preg_match('/^[1-9][0-9]{0,18}$/', (string)$order_id)) {
+            throw new waPaymentException('Invalid order ID.');
+        }
+        return (string)$order_id;
     }
 
 
@@ -652,15 +673,17 @@ class payneteasyPayment extends waPayment implements waIPayment
 //                throw new waPaymentException($this->_w('Order ID not found.'));
 //            }
 
+            $order_id = (int)self::validateOrderId($this->order_id ?? $request['order_id'] ?? null);
+
             $order_model = new shopOrderModel();
-            $order_by_id = $order_model->getById($request['order_id']);
+            $order_by_id = $order_model->getById($order_id);
             $order = waOrder::factory($order_by_id);
 
 //            if (!$order) {
 //                throw new waPaymentException($this->_w('Order not found.'));
 //            }
             
-            $status_data = $this->getPaymentStatusData($this->order_id??$request['order_id']);
+            $status_data = $this->getPaymentStatusData($order_id);
             $transaction_data = $this->changeStatus($status_data, $request, $order);
 
             if ($this->request_type === 'return') {
@@ -797,9 +820,10 @@ class payneteasyPayment extends waPayment implements waIPayment
     {
         $this->setPayneteasyLogger();
 
+        $order_id = (int)$order_id;
         $model = new waModel();
-        $sql = "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = $order_id";
-        $paynet_order_id = $model->query($sql)->fetchAll();
+        $sql = "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id";
+        $paynet_order_id = $model->query($sql, ['order_id' => $order_id])->fetchAll();
 
         // Logging input
         $this->logger->debug(
