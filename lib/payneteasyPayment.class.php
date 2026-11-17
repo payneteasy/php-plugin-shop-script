@@ -61,17 +61,36 @@ class payneteasyPayment extends waPayment implements waIPayment
             // if (!in_array($order->currency_id, $this->allowedCurrency())) {
             //     throw new waException($this->_w('Currency not supported.'));
             // }
-            $pay_url = $this->getPayUrl($order);
-            if ($this->payment_method == 'form') {
-                $pay_url = $pay_url['redirect-url'];
-            } elseif ($this->payment_method == 'direct') {
+            // The payment page can be shown many times (page reload, reopening the order).
+            // A new sale must not be sent while a previous one exists and is approved or still processing.
+            $has_payment = $this->getStoredPaynetOrderId($order->id) !== null;
+            $remote_status = '';
+            if ($has_payment) {
+                $status = $this->getPaymentStatusData($order->id);
+                $remote_status = trim((string)($status['status'] ?? ''));
+            }
+
+            if ($remote_status === 'approved') {
+                return $this->renderMessage($this->_w('The order has already been paid.'));
+            }
+
+            if ($this->payment_method == 'direct') {
+                if (!$has_payment) {
+                    // Card data is sent only once and is not stored after that
+                    $this->getPayUrl($order);
+                } elseif ($remote_status !== 'processing') {
+                    return $this->renderMessage($this->_w('The payment was declined. Please contact the store to pay for the order.'));
+                }
+
                 $pay_url = $this->getRelayUrl().'?transaction_result=result&app_id='.$this->app_id.'&merchant_id='.$this->merchant_id.'&order_id='.$order->id;
                 if ($this->three_d_secure) {
-                    $pay_url = $this->getRelayUrl().'?transaction_result=result&app_id='.$this->app_id.'&merchant_id='.$this->merchant_id.'&order_id='.$order->id;
                     $status = $this->getPaymentStatusData($order->id);
                     $view = wa()->getView();
-                    $view->assign('html', $status['html']);
+                    $view->assign('html', $status['html'] ?? '');
                 }
+            } else {
+                // Payment form: a new form is created only if the previous one was not paid
+                $pay_url = $this->getPayUrl($order)['redirect-url'] ?? '';
             }
 
             $view = wa()->getView();
@@ -169,6 +188,66 @@ class payneteasyPayment extends waPayment implements waIPayment
         }
 
         return parent::customFields($order) + $fields;
+    }
+
+
+    /**
+     * Card fields collected by customFields(); Shop-Script stores them as order params
+     */
+    private const CARD_PARAM_NAMES = [
+        'payment_params_credit_card_number',
+        'payment_params_card_printed_name',
+        'payment_params_expire_month',
+        'payment_params_expire_year',
+        'payment_params_cvv2',
+    ];
+
+
+    /**
+     * Удаляет данные карты из параметров заказа (PCI DSS: CVV нельзя хранить)
+     *
+     * @param int $order_id
+     *
+     * @return void
+     */
+    private function forgetCardData($order_id): void
+    {
+        (new shopOrderParamsModel())->deleteByField([
+            'order_id' => (int)$order_id,
+            'name' => self::CARD_PARAM_NAMES,
+        ]);
+    }
+
+
+    /**
+     * Возвращает paynet_order_id ранее созданного платежа по заказу или null
+     *
+     * @param int $order_id
+     *
+     * @return int|null
+     */
+    private function getStoredPaynetOrderId($order_id): ?int
+    {
+        $model = new waModel();
+        $paynet_order_id = $model->query(
+            "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id",
+            ['order_id' => (int)$order_id]
+        )->fetchField('paynet_order_id');
+
+        return $paynet_order_id ? (int)$paynet_order_id : null;
+    }
+
+
+    /**
+     * Текстовое сообщение вместо формы оплаты
+     *
+     * @param string $message
+     *
+     * @return string
+     */
+    private function renderMessage(string $message): string
+    {
+        return '<p>' . htmlspecialchars($message, ENT_QUOTES, 'UTF-8') . '</p>';
     }
 
 
@@ -466,6 +545,12 @@ class payneteasyPayment extends waPayment implements waIPayment
             'cvv2' => $payneteasy_card_cvv??'',
         ];
 
+        // Card data must not stay in the database: remove it before the request is sent,
+        // so it is gone even if the gateway call fails
+        if ($this->payment_method == 'direct') {
+            $this->forgetCardData($order->id);
+        }
+
         $transaction_data = array(
             'order_id' => $order->id,
         );
@@ -476,12 +561,17 @@ class payneteasyPayment extends waPayment implements waIPayment
 //        $success_url = $this->getRelayUrl() . '?transaction_result=success&order_id='.$order->id;
 //        $fail_url = $this->getRelayUrl() . '?transaction_result=failure';
 
-        $full_name = $order->getContact()->getName();
-        $full_name = explode(' ', $full_name);
-        $last_name = $full_name[0];
-        $first_name = $full_name[1];
-        $shipping_address = $order->shipping_address;
-        $country_name = $shipping_address['country_name'];
+        $contact = $order->getContact();
+        $first_name = trim((string)$contact->get('firstname'));
+        $last_name = trim((string)$contact->get('lastname'));
+        if ($first_name === '' && $last_name === '') {
+            // Fallback for contacts with only a full name: "First Last"
+            $name_parts = preg_split('/\s+/', trim((string)$contact->getName()), 2);
+            $first_name = $name_parts[0] ?? '';
+            $last_name = $name_parts[1] ?? '';
+        }
+        $shipping_address = (array)($order->shipping_address ?? []);
+        $country_name = $shipping_address['country_name'] ?? null;
         $countries = $this->getCountries();
 
         foreach ($countries as $country) {
@@ -490,13 +580,13 @@ class payneteasyPayment extends waPayment implements waIPayment
             }
         }
 
-        $city = $shipping_address['city'];
-        $zip = $shipping_address['zip'];
-        $address = $shipping_address['address'];
+        $city = $shipping_address['city'] ?? '';
+        $zip = $shipping_address['zip'] ?? '';
+        $address = $shipping_address['address'] ?? '';
         $data = [
             'client_orderid' => (string)$order->id,
             'order_desc' => 'Order # ' . $order->id,
-            'amount' => $total,
+            'amount' => number_format((float)$total, 2, '.', ''),
             'currency' => $order->currency,
             'address1' => $address,
             'city' => $city,
@@ -594,6 +684,20 @@ class payneteasyPayment extends waPayment implements waIPayment
         try {
             if (isset($request) && !empty($request)) {
 
+                // redirect_url and the callback URL from the settings carry app_id,
+                // merchant_id and type packed into ?params=<base64 json>
+                if (isset($request['params']) && is_string($request['params'])) {
+                    // the value is not urlencoded, so "+" from base64 arrives as a space
+                    $params = json_decode((string)base64_decode(strtr($request['params'], ' ', '+'), true), true);
+                    if (is_array($params)) {
+                        foreach (['app_id', 'merchant_id', 'type'] as $key) {
+                            if (isset($params[$key]) && is_scalar($params[$key]) && !isset($request[$key])) {
+                                $request[$key] = (string)$params[$key];
+                            }
+                        }
+                    }
+                }
+
                 $this->app_id = $request['app_id'] ?? '';
                 $this->merchant_id = $request['merchant_id'] ?? '';
                 $this->request_type = $request['type'] ?? '';
@@ -626,11 +730,12 @@ class payneteasyPayment extends waPayment implements waIPayment
      */
     private function setOrderId(array $request): void
     {
-        if ($this->request_type === 'return') {
-            $this->order_id = self::validateOrderId($request['order_id'] ?? null);
-        } elseif ($this->request_type === 'webhook') {
-            $php_input = json_decode(file_get_contents('php://input'), true) ?: null;
-            $this->order_id = self::validateOrderId($php_input['object']['order_id'] ?? null);
+        // PaynetEasy sends the shop order id as client_orderid (merchant_order in some responses).
+        // The order status itself is always queried from the gateway, never taken from the request.
+        if ($this->request_type === 'return' || $this->request_type === 'webhook') {
+            $this->order_id = self::validateOrderId(
+                $request['client_orderid'] ?? $request['merchant_order'] ?? $request['order_id'] ?? null
+            );
         }
     }
 
@@ -1012,7 +1117,7 @@ class payneteasyPayment extends waPayment implements waIPayment
         $base = '';
         $base .= $endpointId;
         $base .= $data['client_orderid'];
-        $base .= $data['amount'] * 100;
+        $base .= (int)round((float)$data['amount'] * 100);
         $base .= $data['email'];
 
         return $this->signString($base, $merchantControl);
