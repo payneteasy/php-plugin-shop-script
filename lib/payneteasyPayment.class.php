@@ -702,7 +702,7 @@ class payneteasyPayment extends waPayment implements waIPayment
             'country' => $country_iso??'RU',
             'phone' => $phone,
             'email' => $email,
-            'ipaddress' => $_SERVER['REMOTE_ADDR'],
+            'ipaddress' => (string)waRequest::getIp(),
             'cvv2' => $card_data['cvv2'],
             'credit_card_number' => $card_data['credit_card_number'],
             'card_printed_name' => $card_data['card_printed_name'],
