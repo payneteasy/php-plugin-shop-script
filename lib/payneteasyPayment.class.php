@@ -79,7 +79,10 @@ class payneteasyPayment extends waPayment implements waIPayment
             if ($this->payment_method == 'direct') {
                 if (!$has_payment) {
                     // Card data is sent only once and is not stored after that
-                    $this->getPayUrl($order);
+                    $response = $this->getPayUrl($order);
+                    if (empty($response['paynet-order-id'])) {
+                        return $this->renderGatewayError($order->id, $response);
+                    }
                 } elseif ($remote_status !== 'processing') {
                     return $this->renderMessage($this->_w('The payment was declined. Please contact the store to pay for the order.'));
                 }
@@ -92,7 +95,12 @@ class payneteasyPayment extends waPayment implements waIPayment
                 }
             } else {
                 // Payment form: a new form is created only if the previous one was not paid
-                $pay_url = $this->getPayUrl($order)['redirect-url'] ?? '';
+                $response = $this->getPayUrl($order);
+                $pay_url = (string)($response['redirect-url'] ?? '');
+                if ($pay_url === '') {
+                    // Without a form URL the page would reload itself forever and resend the request
+                    return $this->renderGatewayError($order->id, $response);
+                }
             }
 
             $view = wa()->getView();
@@ -314,6 +322,29 @@ class payneteasyPayment extends waPayment implements waIPayment
     private function isGatewayCallback(array $request): bool
     {
         return isset($request['orderid'], $request['control']);
+    }
+
+
+    /**
+     * Шлюз не создал платёж: пишет ответ шлюза в лог (всегда, уровень error) и
+     * показывает покупателю сообщение вместо формы оплаты.
+     *
+     * @param int   $order_id
+     * @param array $response Ответ шлюза на sale / sale-form
+     *
+     * @return string
+     */
+    private function renderGatewayError($order_id, array $response): string
+    {
+        $this->logger->error(sprintf(
+            'Gateway did not create the payment. Order id: %s; type: %s; error-code: %s; error-message: %s',
+            $order_id,
+            $response['type'] ?? '',
+            $response['error-code'] ?? '',
+            $response['error-message'] ?? ''
+        ));
+
+        return $this->renderMessage($this->_w('The payment could not be started. Please try again later or contact the store.'));
     }
 
 
