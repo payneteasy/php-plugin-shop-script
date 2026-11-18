@@ -12,6 +12,12 @@ use \Payneteasy\Classes\Api\PaynetApi,
  */
 class payneteasyPayment extends waPayment implements waIPayment
 {  
+    /** Extra status queries while the customer waits for a "processing" payment */
+    private const STATUS_RETRIES = 3;
+
+    /** Seconds between those status queries */
+    private const STATUS_RETRY_DELAY = 2;
+
     private ?string $order_id = null;
     private string $request_type;
     private PaynetEasyLogger $logger;
@@ -79,7 +85,10 @@ class payneteasyPayment extends waPayment implements waIPayment
             if ($this->payment_method == 'direct') {
                 if (!$has_payment) {
                     // Card data is sent only once and is not stored after that
-                    $this->getPayUrl($order);
+                    $response = $this->getPayUrl($order);
+                    if (empty($response['paynet-order-id'])) {
+                        return $this->renderGatewayError($order->id, $response);
+                    }
                 } elseif ($remote_status !== 'processing') {
                     return $this->renderMessage($this->_w('The payment was declined. Please contact the store to pay for the order.'));
                 }
@@ -92,7 +101,12 @@ class payneteasyPayment extends waPayment implements waIPayment
                 }
             } else {
                 // Payment form: a new form is created only if the previous one was not paid
-                $pay_url = $this->getPayUrl($order)['redirect-url'] ?? '';
+                $response = $this->getPayUrl($order);
+                $pay_url = (string)($response['redirect-url'] ?? '');
+                if ($pay_url === '') {
+                    // Without a form URL the page would reload itself forever and resend the request
+                    return $this->renderGatewayError($order->id, $response);
+                }
             }
 
             $view = wa()->getView();
@@ -314,6 +328,29 @@ class payneteasyPayment extends waPayment implements waIPayment
     private function isGatewayCallback(array $request): bool
     {
         return isset($request['orderid'], $request['control']);
+    }
+
+
+    /**
+     * Шлюз не создал платёж: пишет ответ шлюза в лог (всегда, уровень error) и
+     * показывает покупателю сообщение вместо формы оплаты.
+     *
+     * @param int   $order_id
+     * @param array $response Ответ шлюза на sale / sale-form
+     *
+     * @return string
+     */
+    private function renderGatewayError($order_id, array $response): string
+    {
+        $this->logger->error(sprintf(
+            'Gateway did not create the payment. Order id: %s; type: %s; error-code: %s; error-message: %s',
+            $order_id,
+            $response['type'] ?? '',
+            $response['error-code'] ?? '',
+            $response['error-message'] ?? ''
+        ));
+
+        return $this->renderMessage($this->_w('The payment could not be started. Please try again later or contact the store.'));
     }
 
 
@@ -600,7 +637,7 @@ class payneteasyPayment extends waPayment implements waIPayment
             'app_id' => $this->app_id, 
             'merchant_id' => $this->merchant_id
         ]));
-        $return_url = $this->getRelayUrl() . '?params=' . $params;
+        $return_url = $this->getRelayUrl() . '?params=' . rawurlencode($params) . '&order_id=' . (int)$order->id;
 
         $email = $order->getContact()->get('email', 'default');
         $phone = $order->getContact()->get('phone', 'default');
@@ -630,15 +667,7 @@ class payneteasyPayment extends waPayment implements waIPayment
             $this->forgetCardData($order->id);
         }
 
-        $transaction_data = array(
-            'order_id' => $order->id,
-        );
-        $success_url = $this->getAdapter()->getBackUrl(waAppPayment::URL_SUCCESS, $transaction_data);
-        $fail_url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
-
         $notify_url = $this->getRelayUrl().'?transaction_result=result&app_id='.$this->app_id.'&merchant_id='.$this->merchant_id.'&order_id='.$order->id;
-//        $success_url = $this->getRelayUrl() . '?transaction_result=success&order_id='.$order->id;
-//        $fail_url = $this->getRelayUrl() . '?transaction_result=failure';
 
         $contact = $order->getContact();
         $first_name = trim((string)$contact->get('firstname'));
@@ -673,7 +702,7 @@ class payneteasyPayment extends waPayment implements waIPayment
             'country' => $country_iso??'RU',
             'phone' => $phone,
             'email' => $email,
-            'ipaddress' => $_SERVER['REMOTE_ADDR'],
+            'ipaddress' => (string)waRequest::getIp(),
             'cvv2' => $card_data['cvv2'],
             'credit_card_number' => $card_data['credit_card_number'],
             'card_printed_name' => $card_data['card_printed_name'],
@@ -681,8 +710,11 @@ class payneteasyPayment extends waPayment implements waIPayment
             'expire_year' => $card_data['expire_year'],
             'first_name' => $first_name,
             'last_name' => $last_name,
-            'redirect_success_url' => $success_url,
-            'redirect_fail_url' => $fail_url,
+            // The customer always comes back through the plugin: it queries the payment
+            // status from the gateway (in case the server callback is late or lost),
+            // updates the order and then redirects to the shop's success or fail page.
+            'redirect_success_url' => $return_url,
+            'redirect_fail_url' => $return_url,
             'redirect_url' => $return_url,
             'server_callback_url' => $notify_url,
         ];
@@ -878,6 +910,20 @@ class payneteasyPayment extends waPayment implements waIPayment
             $is_paid = !empty($order_by_id['paid_date']);
 
             $status_data = $this->getPaymentStatusData($order_id);
+
+            // The customer is waiting on this request (return from the payment form or a click
+            // on the payment page). If the payment is not final yet (3-D Secure, bank processing),
+            // ask the gateway again a few times instead of relying on a later server callback.
+            $customer_request = $this->request_type === 'return'
+                || ($this->request_type !== 'webhook' && !$this->isGatewayCallback($request));
+            for ($attempt = 0;
+                 $customer_request && $attempt < self::STATUS_RETRIES
+                    && trim((string)($status_data['status'] ?? '')) === 'processing';
+                 $attempt++) {
+                sleep(self::STATUS_RETRY_DELAY);
+                $status_data = $this->getPaymentStatusData($order_id);
+            }
+
             $transaction_data = $this->changeStatus($status_data, $request, $order, $is_paid);
 
             if ($this->request_type === 'return') {

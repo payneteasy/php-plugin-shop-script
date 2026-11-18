@@ -99,7 +99,10 @@ class PaynetApi extends Request
 
         parse_str($response, $responseFields);
 
-        return $responseFields;
+        // The gateway separates fields with "\n&", so every value ends with a line break
+        return array_map(function ($value) {
+            return is_string($value) ? trim($value) : $value;
+        }, $responseFields);
 
     }
 
