@@ -252,7 +252,7 @@ class payneteasyPayment extends waPayment implements waIPayment
         }
         $checked = true;
 
-        if ($this->getGeneralSettings('paynet_order_id_bigint')) {
+        if ($this->getGeneralSettings('payments_attempts')) {
             return;
         }
 
@@ -265,9 +265,14 @@ class payneteasyPayment extends waPayment implements waIPayment
             if (stripos((string)$column['Type'], 'bigint') === false) {
                 $model->exec('ALTER TABLE `payneteasy_payments` MODIFY `paynet_order_id` BIGINT UNSIGNED NOT NULL');
             }
+            // One row per payment attempt, not per order
+            if (!$model->query("SHOW COLUMNS FROM `payneteasy_payments` LIKE 'id'")->fetchAssoc()) {
+                $model->exec('ALTER TABLE `payneteasy_payments` DROP PRIMARY KEY, ADD `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST, ADD INDEX `merchant_order_id` (`merchant_order_id`)');
+            }
             $this->setGeneralSettings('paynet_order_id_bigint', 1);
+            $this->setGeneralSettings('payments_attempts', 1);
         } catch (waException $e) {
-            self::log($this->id, 'Cannot widen payneteasy_payments.paynet_order_id to BIGINT: '.$e->getMessage());
+            self::log($this->id, 'Cannot update payneteasy_payments: '.$e->getMessage());
         }
     }
 
@@ -284,7 +289,7 @@ class payneteasyPayment extends waPayment implements waIPayment
         $this->ensureSchema();
         $model = new waModel();
         $paynet_order_id = $model->query(
-            "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id",
+            "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id ORDER BY id DESC LIMIT 1",
             ['order_id' => (int)$order_id]
         )->fetchField('paynet_order_id');
 
@@ -768,7 +773,8 @@ class payneteasyPayment extends waPayment implements waIPayment
         if (isset($paynet_order_id)) {
             $this->ensureSchema();
             $model = new waModel();
-            $sql = "REPLACE INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`) VALUES (i:paynet_order_id, i:merchant_order_id)";
+            // Every attempt is kept: the customer may pay in an older tab
+            $sql = "INSERT INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`) VALUES (i:paynet_order_id, i:merchant_order_id)";
             $model->exec($sql, [
                 'paynet_order_id' => (int)$paynet_order_id,
                 'merchant_order_id' => (int)($merchant_order_id ?? $order->id),
@@ -1083,47 +1089,62 @@ class payneteasyPayment extends waPayment implements waIPayment
         $order_id = (int)$order_id;
         $this->ensureSchema();
         $model = new waModel();
-        $sql = "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id";
-        $paynet_order_id = $model->query($sql, ['order_id' => $order_id])->fetchAll();
-        if (empty($paynet_order_id[0]['paynet_order_id'])) {
+        // All attempts of the order, newest first: an approved attempt wins,
+        // then a processing one, otherwise the latest attempt
+        $sql = "SELECT paynet_order_id FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id ORDER BY id DESC LIMIT 20";
+        $attempts = $model->query($sql, ['order_id' => $order_id])->fetchAll();
+        if (empty($attempts[0]['paynet_order_id'])) {
             throw new waPaymentException('PaynetEasy payment not found for order.');
         }
-
-        // Logging input
-        $this->logger->debug(
-            __FUNCTION__ . ' > status - INPUT: ', [
-            'arguments' => [
-                'order_id' => $order_id,
-                'paynet_order_id' => $paynet_order_id[0]['paynet_order_id']
-            ]
-        ]);
-
-        $data = [
-            'login' => $this->login,
-            'client_orderid' => (string)$order_id,
-            'orderid' => $paynet_order_id[0]['paynet_order_id'],
-        ];
-        $data['control'] = $this->signStatusRequest($data, $this->login, $this->control_key);
 
         $action_url = $this->live_url;
         if ($this->sandbox)
             $action_url = $this->sandbox_url;
 
-        $response = $this->getPaynetApi()->status(
-            $data,
-            $this->payment_method,
-            $this->sandbox,
-            $action_url,
-            $this->endpoint_id
-        );
+        $latest = null;
+        $processing = null;
 
-        // Logging output
-        $this->logger->debug(
-            __FUNCTION__ . ' > status - OUTPUT: ', [
-            'response' => $response
-        ]);
+        foreach ($attempts as $row) {
+            $data = [
+                'login' => $this->login,
+                'client_orderid' => (string)$order_id,
+                'orderid' => (string)$row['paynet_order_id'],
+            ];
+            $data['control'] = $this->signStatusRequest($data, $this->login, $this->control_key);
 
-        return $response;
+            $response = $this->getPaynetApi()->status(
+                $data,
+                $this->payment_method,
+                $this->sandbox,
+                $action_url,
+                $this->endpoint_id
+            );
+
+            // Logging output
+            $this->logger->debug(
+                __FUNCTION__ . ' > status - OUTPUT: ', [
+                'paynet_order_id' => $row['paynet_order_id'],
+                'response' => $response
+            ]);
+
+            // The gateway answers for any transaction id: use only answers for this order
+            if (isset($response['merchant-order-id']) && trim((string)$response['merchant-order-id']) !== (string)$order_id) {
+                continue;
+            }
+
+            $status = trim((string)($response['status'] ?? ''));
+            if ($status === 'approved') {
+                return $response;
+            }
+            if ($status === 'processing' && $processing === null) {
+                $processing = $response;
+            }
+            if ($latest === null) {
+                $latest = $response;
+            }
+        }
+
+        return $processing ?? $latest ?? [];
     }
     
     
