@@ -18,6 +18,11 @@ class payneteasyPayment extends waPayment implements waIPayment
     /** Seconds between those status queries */
     private const STATUS_RETRY_DELAY = 2;
 
+    /**
+     * Seconds during which only one request per order waits for the payment status.
+     */
+    private const STATUS_WAIT_INTERVAL = 60;
+
     private ?string $order_id = null;
     private string $request_type;
     private PaynetEasyLogger $logger;
@@ -922,6 +927,11 @@ class payneteasyPayment extends waPayment implements waIPayment
             // ask the gateway again a few times instead of relying on a later server callback.
             $customer_request = $this->request_type === 'return'
                 || ($this->request_type !== 'webhook' && !$this->isGatewayCallback($request));
+            // The return URL is public: only one request per order may wait for the
+            // status at a time, repeated requests get the current status at once.
+            if ($customer_request && trim((string)($status_data['status'] ?? '')) === 'processing') {
+                $customer_request = $this->acquireStatusWait($order_id);
+            }
             for ($attempt = 0;
                  $customer_request && $attempt < self::STATUS_RETRIES
                     && trim((string)($status_data['status'] ?? '')) === 'processing';
@@ -970,6 +980,47 @@ class payneteasyPayment extends waPayment implements waIPayment
     }
     
     
+    /**
+     * Allows a request to wait for the final payment status of the order.
+     *
+     * The return URL can be opened by anyone, and waiting means several status
+     * requests to the gateway. One request per order may wait within
+     * STATUS_WAIT_INTERVAL seconds; the others answer with the current status.
+     *
+     * @param int $order_id Order ID.
+     *
+     * @return bool TRUE if this request may wait.
+     */
+    private function acquireStatusWait(int $order_id): bool
+    {
+        try {
+            $dir = wa()->getTempPath('payneteasy', 'shop');
+            waFiles::create($dir, true);
+            $handle = @fopen($dir . '/status-wait-' . $order_id, 'c+');
+            if (!$handle) {
+                return false;
+            }
+            if (!flock($handle, LOCK_EX | LOCK_NB)) {
+                fclose($handle);
+                return false;
+            }
+            $last = (int) stream_get_contents($handle);
+            $allowed = time() - $last >= self::STATUS_WAIT_INTERVAL;
+            if ($allowed) {
+                ftruncate($handle, 0);
+                rewind($handle);
+                fwrite($handle, (string) time());
+                fflush($handle);
+            }
+            flock($handle, LOCK_UN);
+            fclose($handle);
+            return $allowed;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+
     /**
      * Gets the payment data and changes the order status
      *
