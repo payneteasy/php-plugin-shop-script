@@ -220,7 +220,7 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
-     * Удаляет данные карты из параметров заказа (PCI DSS: CVV нельзя хранить)
+     * Removes the card data from the order parameters (PCI DSS: CVV must not be stored)
      *
      * @param int $order_id
      *
@@ -236,11 +236,11 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
-     * Расширяет payneteasy_payments.paynet_order_id до BIGINT UNSIGNED, если колонка ещё INT.
+     * Widens payneteasy_payments.paynet_order_id to BIGINT UNSIGNED while the column is still INT.
      *
-     * Скрипт lib/updates не запускается, если плагин обновили заменой файлов без очистки
-     * кэша Webasyst, поэтому схема проверяется здесь. Проверка выполняется один раз:
-     * результат запоминается в настройках плагина.
+     * The lib/updates script does not run when the plugin is updated by replacing files without clearing
+     * the Webasyst cache, so the schema is checked here. The check runs once:
+     * the result is stored in the plugin settings.
      *
      * @return void
      */
@@ -278,7 +278,7 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
-     * Возвращает paynet_order_id ранее созданного платежа по заказу или null
+     * Returns the paynet_order_id of a payment already created for the order, or null
      *
      * @param int $order_id
      *
@@ -298,11 +298,11 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
-     * Отмечает заказ оплаченным, если шлюз сообщил approved, а callback до магазина не дошёл.
-     * Статус получен запросом со своего сервера; ошибка синхронизации не мешает показу страницы.
+     * Marks the order paid when the gateway reports approved and its callback has not reached the shop.
+     * The status comes from a request made by this server; a sync error does not stop the page.
      *
      * @param int   $order_id
-     * @param array $status_data Ответ шлюза на запрос статуса
+     * @param array $status_data Gateway response to the status request
      *
      * @return void
      */
@@ -324,7 +324,7 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
-     * Серверный callback шлюза (а не переход покупателя): PaynetEasy всегда передаёт orderid и control
+     * A server callback of the gateway (not a customer return): PaynetEasy always sends orderid and control
      *
      * @param array $request
      *
@@ -337,11 +337,11 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
-     * Шлюз не создал платёж: пишет ответ шлюза в лог (всегда, уровень error) и
-     * показывает покупателю сообщение вместо формы оплаты.
+     * The gateway did not create the payment: logs the gateway response (always, error level) and
+     * shows the customer a message instead of the payment form.
      *
      * @param int   $order_id
-     * @param array $response Ответ шлюза на sale / sale-form
+     * @param array $response Gateway response to sale / sale-form
      *
      * @return string
      */
@@ -360,7 +360,7 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
-     * Текстовое сообщение вместо формы оплаты
+     * Text message instead of the payment form
      *
      * @param string $message
      *
@@ -628,9 +628,9 @@ class payneteasyPayment extends waPayment implements waIPayment
     
     
     /**
-     * Получает URL-адрес платежа для перенаправления или html формы ввода 3d secure.
+     * Gets the payment URL for the redirect or the html of the 3-D Secure form.
      *
-     * @return array URL-адрес платежа или html формы ввода 3d secure.
+     * @return array Payment URL or the html of the 3-D Secure form.
      */
     private function getPayUrl($order): array
     {
@@ -842,7 +842,7 @@ class payneteasyPayment extends waPayment implements waIPayment
     
     
     /**
-     * Устанавливаем идентификатор заказа для разных типов запроса (return/webhook)
+     * Sets the order ID for each request type (return/webhook)
      *
      * @param array $request The request parameters
      *
@@ -861,7 +861,7 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
-     * Проверяет, что идентификатор заказа состоит только из цифр
+     * Checks that the order ID has digits only
      *
      * @param mixed $order_id
      *
@@ -971,10 +971,10 @@ class payneteasyPayment extends waPayment implements waIPayment
     
     
     /**
-     * Получение информации о платеже и изменение статуса заказа
+     * Gets the payment data and changes the order status
      *
-     * @param array $status_data Массив данных статуса платежа.
-     * @param bool $is_paid       Заказ уже оплачен.
+     * @param array $status_data Payment status data.
+     * @param bool $is_paid       The order is already paid.
      *
      * @return array
      */
@@ -1056,9 +1056,9 @@ class payneteasyPayment extends waPayment implements waIPayment
     
     
     /**
-     * Получение ссылки для редиректа на страницу результата оплаты
+     * Gets the URL of the payment result page
      *
-     * @param array $transaction_data Массив данных транзакции.
+     * @param array $transaction_data Transaction data.
      *
      * @return string
      */
@@ -1078,9 +1078,9 @@ class payneteasyPayment extends waPayment implements waIPayment
     
     
     /**
-     * Получение статуса заказа из Paynet API.
+     * Gets the order status from the Paynet API.
      *
-     * @return array Массив данных статуса платежа.
+     * @return array Payment status data.
      */
     private function getPaymentStatusData($order_id): array
     {
@@ -1149,12 +1149,12 @@ class payneteasyPayment extends waPayment implements waIPayment
     
     
     /**
-     * Сценарий, выполняемый после отлова исключения 
+     * Runs after an exception is caught 
      *
-     * @param \Exception|PaynetEasyException $e   Объект исключения.
-     * @param int $order_id                   Идентификатор заказа.
-     * @param string $caller_func             Название функции, котоорая вызывает обработчик исключений.
-     * @param bool $context                   Массив данных контекста
+     * @param \Exception|PaynetEasyException $e   Exception object.
+     * @param int $order_id                   Order ID.
+     * @param string $caller_func             Name of the function that calls the exception handler.
+     * @param bool $context                   Context data
      *
      * @return void
      */
@@ -1230,9 +1230,9 @@ class payneteasyPayment extends waPayment implements waIPayment
     
     
     /**
-     * Инициализация и настройка объекта класса PaynetEasyLogger.
+     * Creates and configures the PaynetEasyLogger object.
      *
-     * Эта функция инициализирует и настраивает логгер, используемый плагином PaynetEasy для ведения журнала.
+     * This function sets up the logger the PaynetEasy plugin writes its log with.
      *
      * @return PaynetEasyLogger
      */
