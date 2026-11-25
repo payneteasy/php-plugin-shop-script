@@ -652,8 +652,8 @@ class payneteasyPayment extends waPayment implements waIPayment
         $email = $order->getContact()->get('email', 'default');
         $phone = $order->getContact()->get('phone', 'default');
         
-        // total
-        $total = $order->tax_included == false && $order->tax ? $order->tax + $order->total : $order->total;
+        // The order total already contains the tax, also when it is added on top of the prices
+        $total = $order->total;
 
         $order_params = $order->__get('params');
 
