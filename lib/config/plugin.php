@@ -4,7 +4,7 @@ return [
     'description' => 'Pay with PaynetEasy Payment',
     'icon' => 'img/payneteasy.png',
     'logo' => 'img/payneteasy.png',
-    'version' => '1.2.7',
+    'version' => '1.2.8',
     'type' => waPayment::TYPE_ONLINE,
     'vendor'      => 'paynet',
     'locale'      => ['ru_RU', 'en_US'],
