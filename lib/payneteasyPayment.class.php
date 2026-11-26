@@ -23,6 +23,16 @@ class payneteasyPayment extends waPayment implements waIPayment
      */
     private const STATUS_WAIT_INTERVAL = 60;
 
+    /**
+     * @var int Minutes after which card data of an order with an unopened payment page is removed.
+     */
+    private const CARD_DATA_MAX_AGE = 15;
+
+    /**
+     * @var int Minutes during which the payment form of an unpaid attempt is shown again.
+     */
+    private const FORM_REUSE_MINUTES = 10;
+
     private ?string $order_id = null;
     private string $request_type;
     private PaynetEasyLogger $logger;
@@ -68,6 +78,15 @@ class payneteasyPayment extends waPayment implements waIPayment
              ->setOption('additionalCommonText', 'payment-' . rand(1111, 9999));
         $order = waOrder::factory($order_data);
 
+        // The card data of the order is kept only in memory for this request: it
+        // leaves the database before anything else can fail or return early.
+        try {
+            $this->forgetCardData($order->id);
+            $this->forgetStaleCardData();
+        } catch (\Exception $e) {
+            $this->logger->error('payment > cannot remove card data: ' . $e->getMessage() . '; Order id: ' . $order->id);
+        }
+
         try {
             // if (!in_array($order->currency_id, $this->allowedCurrency())) {
             //     throw new waException($this->_w('Currency not supported.'));
@@ -105,12 +124,18 @@ class payneteasyPayment extends waPayment implements waIPayment
                     $view->assign('html', $status['html'] ?? '');
                 }
             } else {
-                // Payment form: a new form is created only if the previous one was not paid
-                $response = $this->getPayUrl($order);
-                $pay_url = (string)($response['redirect-url'] ?? '');
+                // Payment form: while the form of the previous attempt still waits for the
+                // card, the customer gets that form again and no new sale is started.
+                $pay_url = ($has_payment && $remote_status === 'processing')
+                    ? $this->getOpenFormUrl($order->id, $status)
+                    : '';
+                if ($pay_url === '') {
+                    $response = $this->getPayUrl($order);
+                    $pay_url = (string)($response['redirect-url'] ?? '');
+                }
                 if ($pay_url === '') {
                     // Without a form URL the page would reload itself forever and resend the request
-                    return $this->renderGatewayError($order->id, $response);
+                    return $this->renderGatewayError($order->id, $response ?? []);
                 }
             }
 
@@ -241,6 +266,30 @@ class payneteasyPayment extends waPayment implements waIPayment
 
 
     /**
+     * Removes the card data of orders whose payment page was never opened
+     * (the customer left right after placing the order).
+     *
+     * Only orders of this payment plugin older than CARD_DATA_MAX_AGE minutes.
+     *
+     * @return void
+     */
+    private function forgetStaleCardData(): void
+    {
+        (new waModel())->exec(
+            "DELETE p FROM `shop_order_params` p
+                JOIN `shop_order` o ON o.id = p.order_id
+                JOIN `shop_order_params` pp ON pp.order_id = p.order_id AND pp.name = 'payment_plugin' AND pp.value = s:plugin
+              WHERE p.name IN (s:names) AND o.create_datetime < s:before",
+            [
+                'plugin' => $this->id,
+                'names'  => self::CARD_PARAM_NAMES,
+                'before' => date('Y-m-d H:i:s', time() - self::CARD_DATA_MAX_AGE * 60),
+            ]
+        );
+    }
+
+
+    /**
      * Widens payneteasy_payments.paynet_order_id to BIGINT UNSIGNED while the column is still INT.
      *
      * The lib/updates script does not run when the plugin is updated by replacing files without clearing
@@ -257,10 +306,20 @@ class payneteasyPayment extends waPayment implements waIPayment
         }
         $checked = true;
 
-        if ($this->getGeneralSettings('payments_attempts')) {
-            return;
+        if (!$this->getGeneralSettings('payments_attempts')) {
+            $this->ensureAttemptColumns();
         }
+        $this->ensureFormColumns();
+    }
 
+
+    /**
+     * Widens paynet_order_id and turns the table into one row per payment attempt.
+     *
+     * @return void
+     */
+    private function ensureAttemptColumns(): void
+    {
         try {
             $model = new waModel();
             $column = $model->query("SHOW COLUMNS FROM `payneteasy_payments` LIKE 'paynet_order_id'")->fetchAssoc();
@@ -276,6 +335,34 @@ class payneteasyPayment extends waPayment implements waIPayment
             }
             $this->setGeneralSettings('paynet_order_id_bigint', 1);
             $this->setGeneralSettings('payments_attempts', 1);
+        } catch (waException $e) {
+            self::log($this->id, 'Cannot update payneteasy_payments: '.$e->getMessage());
+        }
+    }
+
+
+    /**
+     * Adds the columns that keep the payment form of an attempt (see getOpenFormUrl()).
+     * The check runs once: the result is stored in the plugin settings.
+     *
+     * @return void
+     */
+    private function ensureFormColumns(): void
+    {
+        if ($this->getGeneralSettings('payments_form_url')) {
+            return;
+        }
+
+        try {
+            $model = new waModel();
+            if (!$model->query("SHOW COLUMNS FROM `payneteasy_payments` LIKE 'id'")->fetchAssoc()) {
+                // The table is missing or could not be converted: nothing to add yet
+                return;
+            }
+            if (!$model->query("SHOW COLUMNS FROM `payneteasy_payments` LIKE 'redirect_url'")->fetchAssoc()) {
+                $model->exec("ALTER TABLE `payneteasy_payments` ADD `redirect_url` VARCHAR(1024) NULL, ADD `created` INT UNSIGNED NOT NULL DEFAULT 0");
+            }
+            $this->setGeneralSettings('payments_form_url', 1);
         } catch (waException $e) {
             self::log($this->id, 'Cannot update payneteasy_payments: '.$e->getMessage());
         }
@@ -299,6 +386,40 @@ class payneteasyPayment extends waPayment implements waIPayment
         )->fetchField('paynet_order_id');
 
         return $paynet_order_id ? (int)$paynet_order_id : null;
+    }
+
+
+    /**
+     * The payment form of the latest attempt, if it can still be used.
+     *
+     * Only the form of the attempt the gateway reports as processing, started
+     * not more than FORM_REUSE_MINUTES ago.
+     *
+     * @param int   $order_id
+     * @param array $status_data Gateway status of the attempt in progress
+     *
+     * @return string The form URL, or an empty string.
+     */
+    private function getOpenFormUrl($order_id, array $status_data): string
+    {
+        try {
+            $this->ensureSchema();
+            $row = (new waModel())->query(
+                "SELECT paynet_order_id, redirect_url, created FROM `payneteasy_payments` WHERE merchant_order_id = i:order_id ORDER BY id DESC LIMIT 1",
+                ['order_id' => (int)$order_id]
+            )->fetchAssoc();
+        } catch (waException $e) {
+            return '';
+        }
+
+        $url = (string)($row['redirect_url'] ?? '');
+        if ($url === '' || strpos($url, 'https://') !== 0
+            || (string)$row['paynet_order_id'] !== trim((string)($status_data['paynet-order-id'] ?? ''))
+            || time() - (int)$row['created'] > self::FORM_REUSE_MINUTES * 60) {
+            return '';
+        }
+
+        return $url;
     }
 
 
@@ -779,10 +900,12 @@ class payneteasyPayment extends waPayment implements waIPayment
             $this->ensureSchema();
             $model = new waModel();
             // Every attempt is kept: the customer may pay in an older tab
-            $sql = "INSERT INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`) VALUES (i:paynet_order_id, i:merchant_order_id)";
+            $sql = "INSERT INTO `payneteasy_payments` (`paynet_order_id`, `merchant_order_id`, `redirect_url`, `created`) VALUES (i:paynet_order_id, i:merchant_order_id, s:redirect_url, i:created)";
             $model->exec($sql, [
                 'paynet_order_id' => (int)$paynet_order_id,
                 'merchant_order_id' => (int)($merchant_order_id ?? $order->id),
+                'redirect_url' => substr(trim((string)($response['redirect-url'] ?? '')), 0, 1024),
+                'created' => time(),
             ]);
         }
 
@@ -858,9 +981,14 @@ class payneteasyPayment extends waPayment implements waIPayment
         // PaynetEasy sends the shop order id as client_orderid (merchant_order in some responses).
         // The order status itself is always queried from the gateway, never taken from the request.
         if ($this->request_type === 'return' || $this->request_type === 'webhook') {
-            $this->order_id = self::validateOrderId(
-                $request['client_orderid'] ?? $request['merchant_order'] ?? $request['order_id'] ?? null
-            );
+            try {
+                $this->order_id = self::validateOrderId(
+                    $request['client_orderid'] ?? $request['merchant_order'] ?? $request['order_id'] ?? null
+                );
+            } catch (waPaymentException $e) {
+                // An invalid number is answered by callbackHandler() as an unknown order
+                $this->order_id = null;
+            }
         }
     }
 
@@ -940,7 +1068,22 @@ class payneteasyPayment extends waPayment implements waIPayment
                 $status_data = $this->getPaymentStatusData($order_id);
             }
 
-            $transaction_data = $this->changeStatus($status_data, $request, $order, $is_paid);
+            // The customer return and the server callback come almost together: the order
+            // is updated by one request at a time, with its paid state read under the lock.
+            $order_lock = $this->lockOrder($order_id);
+            try {
+                $order_by_id = $order_model->getById($order_id);
+                $is_paid = !empty($order_by_id['paid_date']);
+                $transaction_data = $this->changeStatus($status_data, $request, waOrder::factory($order_by_id), $is_paid);
+            } finally {
+                $this->unlockOrder($order_lock);
+            }
+
+            try {
+                $this->forgetStaleCardData();
+            } catch (\Exception $e) {
+                $this->logger->error(__FUNCTION__ . ' > cannot remove stale card data: ' . $e->getMessage());
+            }
 
             if ($this->request_type === 'return') {
                 if (($transaction_data['state'] ?? null) == self::STATE_DECLINED || ($transaction_data['state'] ?? null) == self::STATE_CANCELED) {
@@ -968,7 +1111,24 @@ class payneteasyPayment extends waPayment implements waIPayment
                 'redirect' => $url,
             );
             wa()->getResponse()->redirect($url);
-        } catch (\Exception | waException | waPaymentException | PaynetEasyException $e) {
+        } catch (waPaymentException $e) {
+            // Unknown order, an order of another payment method, an invalid number:
+            // nothing to update. The request is answered without a server error.
+            $this->logger->error(sprintf(
+                __FUNCTION__ . ' > %s; Order id: %s',
+                $e->getMessage(),
+                is_scalar($this->order_id ?? null) ? $this->order_id : ''
+            ));
+            if ($this->request_type === 'webhook' || $this->isGatewayCallback((array)$request)) {
+                wa()->getResponse()->setStatus(404);
+                wa()->getResponse()->sendHeaders();
+                echo 'Order not found';
+                return array('template' => false);
+            }
+            return array(
+                'redirect' => wa()->getRouteUrl('shop/frontend', array(), true),
+            );
+        } catch (\Exception | waException | PaynetEasyException $e) {
             // Handle exception and log error
             $this->executeErrorScenario(
                 $e, 
@@ -980,6 +1140,48 @@ class payneteasyPayment extends waPayment implements waIPayment
     }
     
     
+    /**
+     * Takes the exclusive lock of the order, waiting for another request to finish.
+     *
+     * @param int $order_id Order ID.
+     *
+     * @return resource|null The lock handle, or null when the lock file cannot be used.
+     */
+    private function lockOrder(int $order_id)
+    {
+        try {
+            $dir = wa()->getTempPath('payneteasy', 'shop');
+            waFiles::create($dir, true);
+            $handle = @fopen($dir . '/order-lock-' . $order_id, 'c');
+            if ($handle && flock($handle, LOCK_EX)) {
+                return $handle;
+            }
+            if ($handle) {
+                fclose($handle);
+            }
+        } catch (\Throwable $e) {
+            // Without the lock the order is updated as before
+        }
+        return null;
+    }
+
+
+    /**
+     * Releases the lock taken by lockOrder().
+     *
+     * @param resource|null $handle
+     *
+     * @return void
+     */
+    private function unlockOrder($handle): void
+    {
+        if (is_resource($handle)) {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+    }
+
+
     /**
      * Allows a request to wait for the final payment status of the order.
      *
@@ -1098,8 +1300,36 @@ class payneteasyPayment extends waPayment implements waIPayment
             $current_order_status['state'] !== $transaction_data['state'] &&
             $current_order_status['type'] !== $transaction_data['type']
         ) {
-            $transaction_data = $this->saveTransaction($transaction_data, $request);
-            $this->execAppCallback($app_payment_method, $transaction_data);
+            // A repeated return or callback for the same gateway transaction reuses its record
+            $known = self::getTransactionsByFields([
+                'plugin'    => $this->id,
+                'order_id'  => $order->id,
+                'native_id' => $transaction_data['native_id'],
+                'state'     => $transaction_data['state'],
+                'type'      => $transaction_data['type'],
+            ]);
+            if ($known) {
+                $transaction_data['id'] = (int)key($known);
+            } else {
+                $transaction_data = $this->saveTransaction($transaction_data, $request);
+            }
+            $result = $this->execAppCallback($app_payment_method, $transaction_data);
+
+            // The reused record keeps the error of an earlier refusal: clear it once the shop accepts
+            if ($known && is_array($result) && empty($result['error']) && !empty(reset($known)['error'])) {
+                (new waTransactionModel())->updateById($transaction_data['id'], ['error' => null]);
+            }
+
+            // The application refused the payment (e.g. the amount does not match the order):
+            // the order is not paid, the customer must not see the success page.
+            if ($order_status['state'] === self::STATE_CAPTURED && is_array($result) && !empty($result['error'])) {
+                $this->logger->error(sprintf(
+                    __FUNCTION__ . ' > the shop did not accept the payment: %s; Order ID: %s',
+                    is_scalar($result['error']) ? $result['error'] : 'error',
+                    $order->id
+                ));
+                $transaction_data['state'] = self::STATE_DECLINED;
+            }
         }
         
         return $transaction_data;
